@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/henriquepw/relaxa/internal/proc"
+	"github.com/henriquepw/lazypad/internal/proc"
 )
 
 func running(name string) bool {

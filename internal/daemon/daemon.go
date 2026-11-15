@@ -2,21 +2,27 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
-	"github.com/henriquepw/relaxa/internal/audio"
-	"github.com/henriquepw/relaxa/internal/compositor"
-	"github.com/henriquepw/relaxa/internal/config"
-	"github.com/henriquepw/relaxa/internal/gamepad"
-	"github.com/henriquepw/relaxa/internal/mangohud"
-	"github.com/henriquepw/relaxa/internal/steam"
-	"github.com/henriquepw/relaxa/internal/tv"
-	"github.com/henriquepw/relaxa/internal/uinput"
+	"github.com/henriquepw/lazypad/internal/audio"
+	"github.com/henriquepw/lazypad/internal/compositor"
+	"github.com/henriquepw/lazypad/internal/config"
+	"github.com/henriquepw/lazypad/internal/display"
+	"github.com/henriquepw/lazypad/internal/gamepad"
+	"github.com/henriquepw/lazypad/internal/mangohud"
+	"github.com/henriquepw/lazypad/internal/steam"
+	"github.com/henriquepw/lazypad/internal/tv"
+	"github.com/henriquepw/lazypad/internal/uinput"
 )
+
+// desktop is the state with no mode active.
+const desktop = "desktop"
 
 type request struct {
 	cmd     string
@@ -24,12 +30,18 @@ type request struct {
 	reply   chan string
 }
 
+type mode struct {
+	name    string
+	cfg     config.Mode
+	display display.Display
+	tv      tv.TV // nil when the mode has no tv
+}
+
 type daemon struct {
 	cfg       config.Config
-	comp      compositor.Compositor
+	modes     map[string]*mode
+	current   *mode // nil on the desktop
 	prevAudio audio.State
-	tv        tv.TV
-	inTV      bool
 	tvMissing int
 }
 
@@ -44,10 +56,18 @@ func Run() error {
 		return err
 	}
 
-	d := &daemon{
-		cfg:  cfg,
-		comp: comp,
-		tv:   tv.New(cfg.TV.ADB, cfg.TV.MAC, cfg.TV.Input),
+	d := &daemon{cfg: cfg, modes: map[string]*mode{}}
+	for name, mc := range cfg.Modes {
+		m := &mode{name: name, cfg: mc}
+		if m.display, err = display.New(mc.Display, comp); err != nil {
+			return fmt.Errorf("mode %s: %w", name, err)
+		}
+		if mc.TV != nil {
+			if m.tv, err = tv.New(*mc.TV); err != nil {
+				return fmt.Errorf("mode %s: %w", name, err)
+			}
+		}
+		d.modes[name] = m
 	}
 
 	// created up front, so the compositor already knows the device when it is used
@@ -57,14 +77,7 @@ func Run() error {
 	}
 
 	requests := make(chan request)
-	err = gamepad.Watch(cfg.Gamepad.Vendor, []gamepad.Bind{
-		{
-			Combo: cfg.Gamepad.Toggle.Combo,
-			Hold:  cfg.Gamepad.Toggle.Hold,
-			Fire: func(g *gamepad.Gamepad) {
-				requests <- request{cmd: "toggle", gamepad: g}
-			},
-		},
+	binds := []gamepad.Bind{
 		{
 			Combo: cfg.Gamepad.MangoHud.Combo,
 			Hold:  cfg.Gamepad.MangoHud.Hold,
@@ -84,8 +97,17 @@ func Run() error {
 				}
 			},
 		},
-	})
-	if err != nil {
+	}
+	for name, m := range cfg.Modes {
+		binds = append(binds, gamepad.Bind{
+			Combo: m.Combo.Combo,
+			Hold:  m.Hold,
+			Fire: func(g *gamepad.Gamepad) {
+				requests <- request{cmd: "toggle " + name, gamepad: g}
+			},
+		})
+	}
+	if err := gamepad.Watch(cfg.Gamepad.Vendors, binds); err != nil {
 		return err
 	}
 
@@ -108,64 +130,72 @@ func Run() error {
 				req.reply <- reply
 			}
 		case <-poll.C:
-			if d.inTV && d.tvOff() {
-				log.Print("TV turned off, going back to PC mode")
-				d.leaveTV(nil)
+			if d.current != nil && d.current.cfg.ExitOnTVOff && d.tvOff() {
+				log.Print("TV turned off, going back to the desktop")
+				d.leave(nil)
 			}
 		}
 	}
 }
 
 func (d *daemon) handle(req request) string {
-	want := d.inTV
-	switch req.cmd {
-	case "toggle":
-		want = !d.inTV
-	case "tv":
-		want = true
-	case "pc":
-		want = false
+	cmd, name, _ := strings.Cut(req.cmd, " ")
+	var want *mode
+	switch cmd {
 	case "status":
+		want = d.current
+	case "desktop":
+	case "mode", "toggle":
+		m, ok := d.modes[name]
+		if !ok {
+			return "error: unknown mode: " + name
+		}
+		// toggling the current mode goes back to the desktop
+		if cmd == "mode" || m != d.current {
+			want = m
+		}
 	default:
 		return "error: unknown command: " + req.cmd
 	}
 
-	if want && !d.inTV {
-		d.enterTV(req.gamepad)
-	}
-	if !want && d.inTV {
-		d.leaveTV(req.gamepad)
+	if want != d.current {
+		if d.current != nil {
+			d.leave(req.gamepad)
+		}
+		if want != nil {
+			d.enter(want, req.gamepad)
+		}
 	}
 
-	if d.inTV {
-		return "tv"
+	if d.current == nil {
+		return desktop
 	}
-	return "pc"
+	return d.current.name
 }
 
-func (d *daemon) enterTV(g *gamepad.Gamepad) {
+func (d *daemon) enter(m *mode, g *gamepad.Gamepad) {
 	if g != nil {
 		g.Rumble(1)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), d.cfg.TV.WakeTimeout)
-	defer cancel()
-	if err := d.tv.Wake(ctx); err != nil {
-		d.fail(err)
+	if m.tv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), m.cfg.TV.WakeTimeout)
+		if err := m.tv.Wake(ctx); err != nil {
+			d.fail(err)
+		}
+		cancel()
 	}
 
-	if prev, err := audio.Current(d.cfg.Audio.Card); d.must(err) {
-		d.prevAudio = prev
+	if a := m.cfg.Audio; a != nil {
+		if prev, err := audio.Current(a.Card); d.must(err) {
+			d.prevAudio = prev
+		}
 	}
 	d.must(steam.Stop())
-
-	d.must(d.comp.Enable(d.cfg.Outputs.TV))
-	for _, out := range d.cfg.Outputs.PC {
-		d.must(d.comp.Disable(out))
+	d.must(m.display.Start())
+	if a := m.cfg.Audio; a != nil {
+		d.must(audio.Use(a.Card, audio.State{Sink: a.Sink, Profile: a.Profile}))
 	}
-
-	audioState := audio.State{Sink: d.cfg.Audio.TVSink, Profile: d.cfg.Audio.TVProfile}
-	d.must(audio.Use(d.cfg.Audio.Card, audioState))
 
 	for _, name := range d.cfg.Close.Processes {
 		exec.Command("pkill", "-x", name).Run()
@@ -174,35 +204,39 @@ func (d *daemon) enterTV(g *gamepad.Gamepad) {
 		exec.Command("flatpak", "kill", app).Run()
 	}
 
-	d.must(steam.StartGamescope(d.cfg.Gamescope))
-	d.inTV = true
+	d.must(steam.StartGamescope(m.cfg.Gamescope))
+	d.current = m
 	d.tvMissing = 0
 }
 
-func (d *daemon) leaveTV(g *gamepad.Gamepad) {
+func (d *daemon) leave(g *gamepad.Gamepad) {
+	m := d.current
 	if g != nil {
 		g.Rumble(2)
 	}
 	d.must(steam.Stop())
 	steam.StopGamescope()
 
-	for _, out := range d.cfg.Outputs.PC {
-		d.must(d.comp.Enable(out))
-	}
-	d.must(d.comp.Disable(d.cfg.Outputs.TV))
-	if d.prevAudio != (audio.State{}) {
-		d.must(audio.Use(d.cfg.Audio.Card, d.prevAudio))
+	d.must(m.display.Stop())
+	if a := m.cfg.Audio; a != nil && d.prevAudio != (audio.State{}) {
+		d.must(audio.Use(a.Card, d.prevAudio))
 	}
 
 	d.must(steam.StartSilent())
-	d.must(d.tv.Sleep())
-	d.inTV = false
+	if m.tv != nil {
+		d.must(m.tv.Sleep())
+	}
+	d.current = nil
 }
 
-// tvOff reports whether the TV was turned off with its own remote. No adb
-// reply for 3 polls in a row also counts as off.
+// tvOff reports whether the TV was turned off with its own remote. No reply
+// for 3 polls in a row also counts as off.
 func (d *daemon) tvOff() bool {
-	awake, err := d.tv.Awake()
+	if d.current.tv == nil {
+		return false
+	}
+
+	awake, err := d.current.tv.Awake()
 	if err != nil {
 		d.tvMissing++
 		return d.tvMissing >= 3
@@ -221,5 +255,5 @@ func (d *daemon) must(err error) bool {
 
 func (d *daemon) fail(err error) {
 	log.Print(err)
-	exec.Command("notify-send", "relaxa", err.Error()).Run()
+	exec.Command("notify-send", "lazypad", err.Error()).Run()
 }

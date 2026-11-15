@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/henriquepw/relaxa/internal/proc"
+	"github.com/henriquepw/lazypad/internal/proc"
 )
 
 // State is what gets restored when leaving TV mode.

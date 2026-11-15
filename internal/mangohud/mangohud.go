@@ -3,7 +3,7 @@ package mangohud
 import (
 	"net"
 
-	"github.com/henriquepw/relaxa/internal/uinput"
+	"github.com/henriquepw/lazypad/internal/uinput"
 )
 
 // Toggle shows or hides the hud of the running game. It needs `control=mangohud`

@@ -62,7 +62,7 @@ func NewKeyboard(keys ...uint16) (*Keyboard, error) {
 
 	var setup uinputSetup
 	setup.ID[0] = 0x06 // BUS_VIRTUAL
-	copy(setup.Name[:], "relaxa")
+	copy(setup.Name[:], "lazypad")
 	if err := ioctl(fd, uiDevSetup, uintptr(unsafe.Pointer(&setup))); err != nil {
 		f.Close()
 		return nil, err

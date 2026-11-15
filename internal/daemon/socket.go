@@ -10,7 +10,7 @@ import (
 )
 
 func socketPath() string {
-	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "relaxa.sock")
+	return filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "lazypad.sock")
 }
 
 // Send sends a command to the daemon and returns its reply.

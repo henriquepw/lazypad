@@ -1,4 +1,4 @@
-module github.com/henriquepw/relaxa
+module github.com/henriquepw/lazypad
 
 go 1.26.0
 

@@ -1,0 +1,8 @@
+[Unit]
+Description=lazypad: switch between the desktop and couch gaming modes
+
+[Service]
+ExecStart=@BIN@ daemon
+Restart=on-failure
+# keep steam and gamescope running when the daemon restarts
+KillMode=process

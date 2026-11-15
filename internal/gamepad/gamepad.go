@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 	"unsafe"
@@ -101,9 +102,9 @@ type combo struct {
 	fire  func(*Gamepad)
 }
 
-// Watch reads every device from the vendor and fires the binds. Gamepads
+// Watch reads every device from the vendors and fires the binds. Gamepads
 // turned on later are picked up by the periodic scan.
-func Watch(vendor uint16, binds []Bind) error {
+func Watch(vendors []uint16, binds []Bind) error {
 	combos := make([]combo, len(binds))
 	for i, b := range binds {
 		combos[i] = combo{codes: map[uint16]bool{}, hold: b.Hold, fire: b.Fire}
@@ -129,7 +130,7 @@ func Watch(vendor uint16, binds []Bind) error {
 					continue
 				}
 
-				g, err := openGamepad(path, vendor)
+				g, err := openGamepad(path, vendors)
 				if err != nil {
 					continue
 				}
@@ -153,15 +154,15 @@ func Watch(vendor uint16, binds []Bind) error {
 	return nil
 }
 
-func openGamepad(path string, vendor uint16) (*Gamepad, error) {
+func openGamepad(path string, vendors []uint16) (*Gamepad, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}
 	var id inputID
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), eviocgid, uintptr(unsafe.Pointer(&id))); errno != 0 || id.Vendor != vendor {
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), eviocgid, uintptr(unsafe.Pointer(&id))); errno != 0 || !slices.Contains(vendors, id.Vendor) {
 		f.Close()
-		return nil, fmt.Errorf("%s: not from vendor %04x", path, vendor)
+		return nil, fmt.Errorf("%s: vendor %04x is not watched", path, id.Vendor)
 	}
 	return &Gamepad{f: f}, nil
 }

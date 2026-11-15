@@ -10,36 +10,50 @@ import (
 
 type Config struct {
 	Gamepad struct {
-		Vendor   uint16
-		Toggle   Combo
+		Vendors  []uint16
 		MangoHud Combo
 		FPSLimit Combo `toml:"fps_limit"`
 	}
-	TV struct {
-		ADB         string
-		MAC         string
-		Input       string
-		WakeTimeout time.Duration `toml:"wake_timeout"`
-	}
-	Outputs struct {
-		TV string
-		PC []string
-	}
-	Audio struct {
-		Card      string
-		TVProfile string `toml:"tv_profile"`
-		TVSink    string `toml:"tv_sink"`
-	}
-	Gamescope []string
-	Close     struct {
+	Close struct {
 		Processes []string
 		Flatpaks  []string
 	}
+	Modes map[string]Mode
 }
 
 type Combo struct {
 	Combo []string
 	Hold  time.Duration
+}
+
+type Mode struct {
+	Combo
+	Gamescope   []string
+	ExitOnTVOff bool `toml:"exit_on_tv_off"`
+	Display     Display
+	TV          *TV
+	Audio       *Audio
+}
+
+type Display struct {
+	Type    string   // hdmi or virtual
+	Output  string   // output that shows the mode
+	Disable []string // hdmi: outputs turned off while in the mode
+}
+
+type TV struct {
+	Type        string // adb or appletv
+	Addr        string
+	MAC         string        // adb: for Wake-on-LAN
+	Input       string        // adb: TvInputInfo id, listed by `dumpsys tv_input`
+	App         string        // appletv: bundle id opened on wake
+	WakeTimeout time.Duration `toml:"wake_timeout"`
+}
+
+type Audio struct {
+	Card    string
+	Profile string
+	Sink    string
 }
 
 func Load() (Config, error) {
@@ -49,7 +63,7 @@ func Load() (Config, error) {
 	}
 
 	var cfg Config
-	_, err = toml.DecodeFile(filepath.Join(dir, "relaxa", "config.toml"), &cfg)
+	_, err = toml.DecodeFile(filepath.Join(dir, "lazypad", "config.toml"), &cfg)
 
 	return cfg, err
 }
