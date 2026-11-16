@@ -19,7 +19,7 @@ func New(cfg config.TV) (TV, error) {
 	case "adb":
 		return adb{Addr: cfg.Addr, MAC: cfg.MAC, Input: cfg.Input}, nil
 	case "appletv":
-		return appleTV{Addr: cfg.Addr, App: cfg.App}, nil
+		return appleTV{Addr: cfg.Addr, App: cfg.App, Remote: cfg.Remote}, nil
 	default:
 		return nil, fmt.Errorf("unknown tv type: %q", cfg.Type)
 	}

@@ -66,6 +66,10 @@ lazypad desktop         go back to the desktop
 lazypad status          show the current mode
 ```
 
+`mode`, `toggle` and `desktop` take `--no-tv` to switch without turning the TV
+on or off, for when the switch comes from the TV itself (see
+[Streaming with Sunshine](#streaming-with-sunshine)).
+
 A mode's combo does the same as `lazypad toggle <name>`. The gamepad rumbles
 once when entering a mode and twice when leaving it.
 
@@ -128,6 +132,7 @@ output = "STREAM"
 type = "appletv"
 addr = "192.168.1.234"
 app = "com.moonlight-stream.Moonlight" # bundle id opened on wake
+remote = ["delay=3000", "select", "delay=4000", "select"] # keys sent once it is open
 wake_timeout = "20s"
 ```
 
@@ -168,8 +173,12 @@ the input through its passthrough URI instead. List the inputs with
 `adb shell dumpsys tv_input`. lazypad runs its own adb server on port 5038, so
 restarting it doesn't drop your other devices.
 
-**`appletv`** turns the Apple TV on and opens `app`. Pair the Companion
-protocol once before using it:
+**`appletv`** turns the Apple TV on, opens `app` and then sends the
+`atvremote` commands in `remote`, if any. With Moonlight, two `select`s open
+the first host and start its first app; the delays give Moonlight time to find
+the host, so tune them to your network. Moonlight reopens on the screen it was
+left on, so this works best when it was closed on the host list. Pair the
+Companion protocol once before using it:
 
 ```sh
 atvremote -s 192.168.1.234 --protocol companion pair
@@ -186,12 +195,13 @@ headless output with wlroots capture, in `~/.config/sunshine/sunshine.conf`:
 
 ```
 capture = wlr
-output_name = 1
+output_name = STREAM
 ```
 
-`output_name` is an index, taken from the `[wlgrab] Monitor N is ...` lines in
-Sunshine's log. While the virtual output doesn't exist, Sunshine falls back to
-monitor 0.
+`output_name` is the name of the virtual output, as shown in the
+`[wlgrab] Monitor N is ...` lines in Sunshine's log. Recent Sunshine versions
+match outputs by name, and an index there only works in the first capture
+probe: the stream itself falls back to monitor 0.
 
 Then add an app in `apps.json` that enters and leaves the mode, so a stream
 started from Moonlight works too:
@@ -200,10 +210,16 @@ started from Moonlight works too:
 {
   "name": "Steam",
   "prep-cmd": [
-    { "do": "lazypad mode livingroom", "undo": "lazypad desktop", "elevated": "false" }
+    { "do": "lazypad mode livingroom --no-tv", "undo": "lazypad desktop --no-tv", "elevated": "false" }
   ]
 }
 ```
+
+`--no-tv` keeps lazypad away from the TV here: the stream already comes from
+it, so there's no app to open when starting, and quitting the stream in
+Moonlight leaves the TV on. Leaving with the combo still turns it off. In a
+`virtual` mode lazypad wakes the TV only after the output and gamescope are up,
+so a stream Moonlight starts on its own finds the mode ready.
 
 To use the combos through Moonlight, add the vendor id of Sunshine's virtual
 gamepad to `vendors` (`0x057e` with `gamepad = switch`).

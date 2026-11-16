@@ -47,6 +47,7 @@ type TV struct {
 	MAC         string        // adb: for Wake-on-LAN
 	Input       string        // adb: TvInputInfo id, listed by `dumpsys tv_input`
 	App         string        // appletv: bundle id opened on wake
+	Remote      []string      // appletv: atvremote commands sent once the app is open
 	WakeTimeout time.Duration `toml:"wake_timeout"`
 }
 

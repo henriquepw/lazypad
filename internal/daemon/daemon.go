@@ -16,6 +16,7 @@ import (
 	"github.com/henriquepw/lazypad/internal/display"
 	"github.com/henriquepw/lazypad/internal/gamepad"
 	"github.com/henriquepw/lazypad/internal/mangohud"
+	"github.com/henriquepw/lazypad/internal/proc"
 	"github.com/henriquepw/lazypad/internal/steam"
 	"github.com/henriquepw/lazypad/internal/tv"
 	"github.com/henriquepw/lazypad/internal/uinput"
@@ -132,14 +133,21 @@ func Run() error {
 		case <-poll.C:
 			if d.current != nil && d.current.cfg.ExitOnTVOff && d.tvOff() {
 				log.Print("TV turned off, going back to the desktop")
-				d.leave(nil)
+				d.leave(nil, true)
 			}
 		}
 	}
 }
 
+func Restart() error {
+	return proc.Run("systemctl", "--user", "restart", "lazypad")
+}
+
 func (d *daemon) handle(req request) string {
-	cmd, name, _ := strings.Cut(req.cmd, " ")
+	// --no-tv leaves the TV as it is, for when the switch comes from the TV
+	// itself, like a stream started or quit in Moonlight
+	line, noTV := strings.CutSuffix(req.cmd, " --no-tv")
+	cmd, name, _ := strings.Cut(line, " ")
 	var want *mode
 	switch cmd {
 	case "status":
@@ -160,10 +168,10 @@ func (d *daemon) handle(req request) string {
 
 	if want != d.current {
 		if d.current != nil {
-			d.leave(req.gamepad)
+			d.leave(req.gamepad, !noTV)
 		}
 		if want != nil {
-			d.enter(want, req.gamepad)
+			d.enter(want, req.gamepad, !noTV)
 		}
 	}
 
@@ -173,17 +181,16 @@ func (d *daemon) handle(req request) string {
 	return d.current.name
 }
 
-func (d *daemon) enter(m *mode, g *gamepad.Gamepad) {
+func (d *daemon) enter(m *mode, g *gamepad.Gamepad, useTV bool) {
 	if g != nil {
 		g.Rumble(1)
 	}
 
-	if m.tv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), m.cfg.TV.WakeTimeout)
-		if err := m.tv.Wake(ctx); err != nil {
-			d.fail(err)
-		}
-		cancel()
+	// a physical output only shows up once the TV is on, while a streaming
+	// client on the TV connects right away, so it waits for the stream to be ready
+	virtual := m.cfg.Display.Type == "virtual"
+	if useTV && !virtual {
+		d.wake(m)
 	}
 
 	if a := m.cfg.Audio; a != nil {
@@ -205,11 +212,26 @@ func (d *daemon) enter(m *mode, g *gamepad.Gamepad) {
 	}
 
 	d.must(steam.StartGamescope(m.cfg.Gamescope))
+	if useTV && virtual {
+		d.wake(m)
+	}
 	d.current = m
 	d.tvMissing = 0
 }
 
-func (d *daemon) leave(g *gamepad.Gamepad) {
+func (d *daemon) wake(m *mode) {
+	if m.tv == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.TV.WakeTimeout)
+	defer cancel()
+	if err := m.tv.Wake(ctx); err != nil {
+		d.fail(err)
+	}
+}
+
+func (d *daemon) leave(g *gamepad.Gamepad, useTV bool) {
 	m := d.current
 	if g != nil {
 		g.Rumble(2)
@@ -223,7 +245,7 @@ func (d *daemon) leave(g *gamepad.Gamepad) {
 	}
 
 	d.must(steam.StartSilent())
-	if m.tv != nil {
+	if useTV && m.tv != nil {
 		d.must(m.tv.Sleep())
 	}
 	d.current = nil

@@ -11,15 +11,16 @@ import (
 // appleTV controls an Apple TV through atvremote, from pyatv. It needs the
 // companion protocol paired once with `atvremote -s <addr> --protocol companion pair`.
 type appleTV struct {
-	Addr string
-	App  string // bundle id opened on wake
+	Addr   string
+	App    string   // bundle id opened on wake
+	Remote []string // atvremote commands sent once the app is open, like select or delay=2000
 }
 
 func (t appleTV) Wake(ctx context.Context) error {
 	for {
 		_, err := t.output("turn_on", "launch_app="+t.App)
 		if err == nil {
-			return nil
+			break
 		}
 
 		select {
@@ -28,6 +29,13 @@ func (t appleTV) Wake(ctx context.Context) error {
 		case <-time.After(time.Second):
 		}
 	}
+
+	if len(t.Remote) == 0 {
+		return nil
+	}
+	// the delays between the keys add up, so it gets more time than a single command
+	_, err := t.run(30*time.Second, t.Remote...)
+	return err
 }
 
 func (t appleTV) Sleep() error {
@@ -45,7 +53,11 @@ func (t appleTV) Awake() (bool, error) {
 }
 
 func (t appleTV) output(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return t.run(10*time.Second, args...)
+}
+
+func (t appleTV) run(timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	args = append([]string{"-s", t.Addr}, args...)
